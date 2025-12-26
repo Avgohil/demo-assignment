@@ -214,13 +214,12 @@ def get_first_name() -> str:
 
 def generate_technical_questions(tech_stack: list, position: str) -> list:
     """
-    Generate technical questions based on tech stack and position.
+    Generate 3-5 technical screening questions based on tech stack.
     
-    Question Distribution Logic:
+    Question Distribution:
     - 1 technology → 2-3 questions
-    - 2 technologies → 1-2 questions per technology
-    - 3+ technologies → 1 question per technology
-    - Total: 3-5 questions maximum
+    - 2 technologies → 1-2 questions per tech
+    - 3+ technologies → 1 question per tech
     """
     if not tech_stack:
         return []
@@ -230,53 +229,60 @@ def generate_technical_questions(tech_stack: list, position: str) -> list:
     
     # Determine number of questions
     if num_techs == 1:
-        num_questions = "2 to 3"
+        target_count = "2 to 3"
     elif num_techs == 2:
-        num_questions = "1 to 2 per technology (total 2-4)"
+        target_count = "3 to 4"
     else:
-        num_questions = "exactly 1 per technology"
+        target_count = "3 to 5"
     
-    prompt = f"""You are a technical interviewer conducting an initial screening.
+    prompt = f"""You are a technical interviewer.
 
-The candidate has declared the following tech stack:
+The candidate has the following validated and normalized technologies:
 {tech_list_str}
 
-Position: {position}
+RULES:
+1. Generate ONLY technical questions.
+2. Do NOT acknowledge the tech stack.
+3. Do NOT add greetings or introductions.
+4. Total questions must be between 3 and 5.
+5. If only one technology is listed, ask 2–3 questions.
+6. Ask ONLY from the listed technologies.
+7. Do NOT assume libraries or tools.
+8. Questions must be practical and beginner-friendly.
+9. Do NOT evaluate answers.
 
-STRICT RULES (NON-NEGOTIABLE):
-1. Generate {num_questions} questions ONLY from the technologies listed above.
-2. Total questions must be BETWEEN 3 and 5.
-3. Do NOT assume related domains, tools, or libraries:
-   - "Machine Learning" does NOT include NLP, LLMs, chatbots, or AI.
-   - "Python" means core Python only (syntax, data structures, OOP).
-   - "SQL" means database queries only (no specific DBMS features).
-4. Questions must be practical, beginner-friendly, and screening-level.
-5. Do NOT evaluate, judge, or add explanations.
-6. Do NOT introduce technologies not listed.
+OUTPUT FORMAT:
 
-OUTPUT FORMAT (MANDATORY):
+Question 1:
+<question>
 
-Question 1 ({tech_stack[0]}):
-<Question text here>
+Question 2:
+<question>
 
-Question 2 ({tech_stack[1] if num_techs > 1 else tech_stack[0]}):
-<Question text here>
+(continue)
 
-Continue for all questions.
-
-IMPORTANT: Output ONLY the numbered questions. Nothing else."""
+Only output the questions."""
     
     response = call_llm(prompt)
     
-    # Parse response into individual questions
+    # Parse questions from response
     questions = []
     for line in response.split("\n"):
         line = line.strip()
-        if line and re.match(r"^Question\s+\d+", line):
-            # Remove the "Question N (Tech):" prefix and keep just the question
-            cleaned = re.sub(r"^Question\s+\d+\s*(\([^)]+\))?\s*[:.]\s*", "", line)
-            if cleaned:
+        # Match "Question N:" or "Q N:" format
+        if re.match(r"^(Question|Q)\s*\d+\s*[:.]\s*", line):
+            # Remove the prefix
+            cleaned = re.sub(r"^(Question|Q)\s*\d+\s*[:.]\s*", "", line).strip()
+            if cleaned and len(cleaned) > 5:  # Ensure it's a real question
                 questions.append(cleaned)
+    
+    # Return 3-5 questions
+    if len(questions) >= 3:
+        return questions[:5]
+    elif questions:
+        return questions  # Return what we have
+    else:
+        return []  # No questions parsed
     
     # Ensure we return 3-5 questions
     if len(questions) < 3:
