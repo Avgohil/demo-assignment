@@ -1,9 +1,67 @@
+"""
+TalentScout - AI-Powered Hiring Assistant Chatbot
+
+CONVERSATION RULES:
+- Ask one question at a time with clear guidance
+- Collect 7 pieces of information sequentially
+- Validate structured inputs (email, phone, years)
+- Generate 3-5 technical questions based on declared tech stack only
+- Never assume related technologies or libraries
+- Support exit keywords: exit, quit, bye, stop
+
+TECH STACK NORMALIZATION:
+- Trim whitespace and remove duplicates
+- Map common variants (e.g., "ml basics" → "Machine Learning")
+- Validate and ignore unrecognized technologies
+- Use ONLY normalized technologies for questions
+
+QUESTION DISTRIBUTION:
+- 1 technology: 2-3 questions
+- 2 technologies: 1-2 questions each
+- 3+ technologies: 1 question each
+- Total: 3-5 questions maximum
+"""
+
 import streamlit as st
 import re
 import os
 from dotenv import load_dotenv
-import anthropic
-import google.generativeai as genai
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Recognized technologies for validation
+RECOGNIZED_TECHNOLOGIES = {
+    "python", "javascript", "java", "c++", "c#", "golang", "rust", "php",
+    "ruby", "typescript", "kotlin", "swift", "r", "scala", "perl",
+    "machine learning", "ml", "artificial intelligence", "ai",
+    "data science", "data analysis", "analytics",
+    "sql", "database", "postgresql", "mysql", "mongodb", "nosql",
+    "react", "angular", "vue", "svelte", "html", "css",
+    "nodejs", "express", "django", "flask", "spring", "fastapi",
+    "docker", "kubernetes", "aws", "gcp", "azure", "devops",
+    "git", "linux", "windows", "macos"
+}
+
+# Variant mappings for normalization
+TECH_VARIANTS = {
+    "ml basics": "Machine Learning",
+    "ml fundamentals": "Machine Learning",
+    "ml": "Machine Learning",
+    "ai": "Artificial Intelligence",
+    "ai basics": "Artificial Intelligence",
+    "py": "Python",
+    "sql": "SQL",
+    "db": "Database",
+    "frontend": "Frontend",
+    "backend": "Backend",
+    "fullstack": "Fullstack",
+    "web": "Web Development",
+    "mobile": "Mobile Development"
+}
+import re
+import os
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,14 +75,20 @@ if LLM_PROVIDER == "openai":
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 elif LLM_PROVIDER == "anthropic":
-    
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+    except ImportError:
+        raise ImportError("Please install anthropic: pip install anthropic")
 elif LLM_PROVIDER == "gemini":
-    # import google.generativeai as genai
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-    client = genai.GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
-    MODEL = None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        client = genai.GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
+        MODEL = None
+    except ImportError:
+        raise ImportError("Please install google-generativeai: pip install google-generativeai")
 elif LLM_PROVIDER == "ollama":
     from openai import OpenAI
     # Ollama uses OpenAI-compatible API
@@ -110,10 +174,37 @@ def validate_years_of_experience(years: str) -> bool:
     except ValueError:
         return False
 
-def parse_tech_stack(tech_stack_str: str) -> list:
-    """Parse comma-separated tech stack into a list."""
+def parse_tech_stack(tech_stack_str: str) -> tuple[list, list]:
+    """
+    Parse and normalize tech stack with variant mapping.
+    Returns: (normalized_techs, ignored_techs)
+    """
     techs = [tech.strip() for tech in tech_stack_str.split(",") if tech.strip()]
-    return techs[:5]  # Limit to 5 technologies
+    
+    normalized = []
+    ignored = []
+    seen = set()
+    
+    for tech in techs:
+        tech_lower = tech.lower()
+        
+        # Check variant mappings first
+        if tech_lower in TECH_VARIANTS:
+            mapped = TECH_VARIANTS[tech_lower]
+            if mapped.lower() not in seen:
+                normalized.append(mapped)
+                seen.add(mapped.lower())
+        # Check recognized technologies
+        elif tech_lower in RECOGNIZED_TECHNOLOGIES:
+            title_case = tech.title()
+            if title_case.lower() not in seen:
+                normalized.append(title_case)
+                seen.add(title_case.lower())
+        else:
+            # Unrecognized technology
+            ignored.append(tech)
+    
+    return normalized[:5], ignored  # Limit to 5 technologies
 
 
 def get_first_name() -> str:
@@ -122,40 +213,62 @@ def get_first_name() -> str:
     return full_name.strip().split()[0] if full_name else "there"
 
 def generate_technical_questions(tech_stack: list, position: str) -> list:
-    """Generate technical questions based on tech stack and position."""
+    """
+    Generate technical questions based on tech stack and position.
+    
+    Question Distribution Logic:
+    - 1 technology → 2-3 questions
+    - 2 technologies → 1-2 questions per technology
+    - 3+ technologies → 1 question per technology
+    - Total: 3-5 questions maximum
+    """
     if not tech_stack:
         return []
     
     tech_list_str = ", ".join(tech_stack)
-    prompt = f"""You are a technical interviewer.
+    num_techs = len(tech_stack)
+    
+    # Determine number of questions
+    if num_techs == 1:
+        num_questions = "2 to 3"
+    elif num_techs == 2:
+        num_questions = "1 to 2 per technology (total 2-4)"
+    else:
+        num_questions = "exactly 1 per technology"
+    
+    prompt = f"""You are a technical interviewer conducting an initial screening.
 
-The candidate has explicitly declared the following tech stack:
+The candidate has declared the following tech stack:
 {tech_list_str}
 
 Position: {position}
 
-ABSOLUTE RULES (NO EXCEPTIONS):
-1. Generate questions ONLY from the exact technologies listed.
-2. If the stack contains ONLY "Python":
-   - Ask ONLY core Python questions (syntax, data types, functions, OOP basics).
-   - Do NOT mention or assume ML, NLP, AI, data science, or any libraries.
-3. Do NOT introduce any tools, frameworks, or libraries unless explicitly provided.
-4. Generate exactly ONE question per technology.
-5. Do NOT add explanations, assumptions, or extra context.
-6. Questions must be practical and role-relevant.
+STRICT RULES (NON-NEGOTIABLE):
+1. Generate {num_questions} questions ONLY from the technologies listed above.
+2. Total questions must be BETWEEN 3 and 5.
+3. Do NOT assume related domains, tools, or libraries:
+   - "Machine Learning" does NOT include NLP, LLMs, chatbots, or AI.
+   - "Python" means core Python only (syntax, data structures, OOP).
+   - "SQL" means database queries only (no specific DBMS features).
+4. Questions must be practical, beginner-friendly, and screening-level.
+5. Do NOT evaluate, judge, or add explanations.
+6. Do NOT introduce technologies not listed.
 
 OUTPUT FORMAT (MANDATORY):
 
-Question 1 ({tech_stack[0] if tech_stack else 'Technology'}):
-<Question>
+Question 1 ({tech_stack[0]}):
+<Question text here>
 
-Question 2 ({tech_stack[1] if len(tech_stack) > 1 else 'Technology'}):
-<Question>
+Question 2 ({tech_stack[1] if num_techs > 1 else tech_stack[0]}):
+<Question text here>
 
-Only output the questions. Nothing else."""
+Continue for all questions.
+
+IMPORTANT: Output ONLY the numbered questions. Nothing else."""
     
     response = call_llm(prompt)
-    # Parse response into individual questions - support formats like "Question 1 (Python):" or "Question 1:"
+    
+    # Parse response into individual questions
     questions = []
     for line in response.split("\n"):
         line = line.strip()
@@ -164,6 +277,11 @@ Only output the questions. Nothing else."""
             cleaned = re.sub(r"^Question\s+\d+\s*(\([^)]+\))?\s*[:.]\s*", "", line)
             if cleaned:
                 questions.append(cleaned)
+    
+    # Ensure we return 3-5 questions
+    if len(questions) < 3:
+        return questions  # Return what we have if less than 3
+    return questions[:5]  # Cap at 5
     return questions[:5]  # Ensure max 5 questions
 
 def get_greeting_message() -> str:
@@ -243,13 +361,26 @@ def process_user_input(user_input: str) -> str:
         return f"Got it! You're based in {user_input}."
     
     elif info["tech_stack"] is None:
-        tech_stack = parse_tech_stack(user_input)
-        if not tech_stack:
-            return "Please provide at least one technology. For example: Python, JavaScript, React."
-        st.session_state.candidate_info["tech_stack"] = user_input
-        st.session_state.tech_stack_list = tech_stack
-        st.session_state.stage = "technical_questions"
-        return f"Great! I've noted your tech stack: {', '.join(tech_stack)}. Now let me generate some technical questions for you..."
+        normalized_stack, ignored = parse_tech_stack(user_input)
+        if not normalized_stack and not ignored:
+            return "Please provide at least one technology. For example: Python, JavaScript, SQL."
+        elif not normalized_stack and ignored:
+            # All technologies were unrecognized
+            return f"I didn't recognize those technologies. Please provide at least one. Examples: Python, JavaScript, SQL, Machine Learning."
+        else:
+            # We have recognized technologies
+            st.session_state.candidate_info["tech_stack"] = user_input
+            st.session_state.tech_stack_list = normalized_stack
+            st.session_state.stage = "technical_questions"
+            
+            response = f"Great! I've noted your tech stack: {', '.join(normalized_stack)}."
+            
+            # Notify if some technologies were ignored
+            if ignored:
+                response += f"\n\n(I noticed some unrecognized technologies: {', '.join(ignored)}. I'll proceed with the recognized ones.)"
+            
+            response += "\n\nLet's begin your technical questions."
+            return response
     
     return "I didn't quite understand that. Could you please rephrase?"
 
