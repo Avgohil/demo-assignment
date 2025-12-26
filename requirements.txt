@@ -1,0 +1,7 @@
+streamlit==1.28.1
+python-dotenv==1.0.0
+
+# LLM Providers (install only what you need)
+openai>=1.3.0              # For OpenAI GPT models or Ollama
+anthropic>=0.39.0          # For Claude models
+google-generativeai>=0.3.0 # For Google Gemini models
